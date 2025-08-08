@@ -57,8 +57,16 @@ def send_telegram_message(message):
         logger.error(f"An unexpected error occurred in send_telegram_message: {e}", exc_info=True)
 
 class PerpRatioCalculator:
+    # Exchange alias mapping
+    EXCHANGE_ALIASES = {
+        'bn': 'binance',
+        'bb': 'bybit', 
+        'bg': 'bitget'
+    }
+    
     def __init__(self, exchange_name: str):
-        self.exchange_name = exchange_name.lower()
+        # Handle aliases
+        self.exchange_name = self.EXCHANGE_ALIASES.get(exchange_name.lower(), exchange_name.lower())
         self.exchange = self._initialize_exchange()
     
     def _clean_symbol(self, symbol: str) -> str:
@@ -186,15 +194,28 @@ class PerpRatioCalculator:
                 continue
                 
             side = pos['side']
-            if side == 'long':
-                notional_value = abs(notional)
-            elif side == 'short':
-                notional_value = -abs(notional)
-            else:
-                continue
-                
             # Get unrealized PNL
             unrealized_pnl = pos.get('unrealizedPnl', 0) or 0
+            
+            # For Bybit, adjust notional value with unrealized PNL
+            if self.exchange_name == 'bybit':
+                # For Bybit, the notional doesn't include PNL, so we need to adjust it
+                # For long positions: actual exposure = notional + unrealized_pnl
+                # For short positions: actual exposure = notional - unrealized_pnl (since PNL is negative for profitable shorts)
+                if side == 'long':
+                    notional_value = abs(notional) + unrealized_pnl
+                elif side == 'short':
+                    notional_value = -(abs(notional) - unrealized_pnl)
+                else:
+                    continue
+            else:
+                # For other exchanges, use notional as-is
+                if side == 'long':
+                    notional_value = abs(notional)
+                elif side == 'short':
+                    notional_value = -abs(notional)
+                else:
+                    continue
             
             if symbol not in symbol_positions:
                 symbol_positions[symbol] = 0
@@ -404,9 +425,9 @@ class PerpRatioCalculator:
         return message
 
 def run_both_exchanges():
-    logger.info("Starting hourly analysis for both exchanges...")
+    logger.info("Starting hourly analysis for all exchanges...")
     
-    exchanges = ['binance', 'bybit']
+    exchanges = ['binance', 'bybit', 'bitget']
     
     for i, exchange in enumerate(exchanges):
         try:
@@ -433,8 +454,8 @@ def run_both_exchanges():
 
 def main():
     parser = argparse.ArgumentParser(description='Calculate long/short ratio for perpetual positions')
-    parser.add_argument('--exchange', choices=['binance', 'bybit', 'bitget'], default='binance',
-                       help='Exchange to fetch positions from (default: binance)')
+    parser.add_argument('-e', '--exchange', choices=['binance', 'bybit', 'bitget', 'bn', 'bb', 'bg'], default='binance',
+                       help='Exchange to fetch positions from. Aliases: bn=binance, bb=bybit, bg=bitget (default: binance)')
     parser.add_argument('--daemon', action='store_true',
                        help='Run continuously and send hourly reports to Telegram')
     
